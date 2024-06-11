@@ -11,14 +11,19 @@ export class CharacterControls {
     animationsMap: Map<string, THREE.AnimationAction>;
 
     // state
-    toggleRun = true;
-    
+    toggleRun = false;
+    isJumping = false;
+    jumpStartTime = 0;
+    initialJumpVelocity = 2;
+    gravity = -10;
+
     // temporary data
     walkDirection = new THREE.Vector3();
     rotateAngle = new THREE.Vector3(0, 1, 0);
     rotateQuaternion = new THREE.Quaternion();
     cameraTarget = new THREE.Vector3();
-    
+    jumpVelocity = new THREE.Vector3(0, 0, 0); // Define jumpVelocity
+
     // constants
     runVelocity = 5;
     walkVelocity = 2;
@@ -30,58 +35,116 @@ export class CharacterControls {
         this.camera = camera;
         this.animationsMap = animationsMap;
         this.currentAction = currentAction;
+        this.playAnimation('Idle'); // Ensure initial animation is Idle
         this.updateCameraTarget(0, 0);
     }
 
     public update(delta: number, keysPressed: { [key: string]: boolean }) {
         const directionPressed = DIRECTIONS.some(key => keysPressed[key] === true);
 
-        if (directionPressed) {
-            // calculate towards camera direction
-            const angleYCameraDirection = Math.atan2(
-                (this.camera.position.x - this.model.position.x), 
-                (this.camera.position.z - this.model.position.z)
-            );
-            // diagonal movement angle offset
-            const directionOffset = this.directionOffset(keysPressed);
+        if (keysPressed[' ']) { // Space key for jump
+            this.startJump();
+        }
 
-            // rotate model
-            this.rotateQuaternion.setFromAxisAngle(this.rotateAngle, angleYCameraDirection + directionOffset);
-            this.model.quaternion.rotateTowards(this.rotateQuaternion, 0.2);
-
-            // calculate direction
-            this.camera.getWorldDirection(this.walkDirection);
-            this.walkDirection.y = 0;
-            this.walkDirection.normalize();
-            this.walkDirection.applyAxisAngle(this.rotateAngle, directionOffset);
-
-            // run/walk velocity
-            const velocity = this.toggleRun ? this.runVelocity : this.walkVelocity;
-
-            // move model & camera
-            const moveX = -this.walkDirection.x * velocity * delta;
-            const moveZ = -this.walkDirection.z * velocity * delta;
-            this.model.position.x += moveX;
-            this.model.position.z += moveZ;
-            this.updateCameraTarget(moveX, moveZ);
-
-            if (this.currentAction !== 'Walk') {
-                this.currentAction = 'Walk';
-                this.playAnimation('Walk');
-            }
+        if (this.isJumping) {
+            this.updateJump(delta, keysPressed);
+        } else if (directionPressed) {
+            this.moveCharacter(delta, keysPressed);
         } else {
             if (this.currentAction !== 'Idle') {
-                this.currentAction = 'Idle';
                 this.playAnimation('Idle');
+            }
+        }
+
+        // Ensure character does not sink below the ground
+        if (this.model.position.y < 0) {
+            this.model.position.y = 0;
+        }
+
+        this.updateCameraTarget(0, 0);
+    }
+
+    private startJump() {
+        if (!this.isJumping) {
+            this.isJumping = true;
+            this.jumpStartTime = performance.now();
+            this.jumpVelocity.y = this.initialJumpVelocity;
+            this.playAnimation('Jump'); // Assumes a jump animation is available
+        }
+    }
+
+    private updateJump(delta: number, keysPressed: { [key: string]: boolean }) {
+        const elapsedTime = (performance.now() - this.jumpStartTime) / 1000;
+        const displacement = (this.initialJumpVelocity * elapsedTime) + (0.5 * this.gravity * Math.pow(elapsedTime, 2));
+        this.model.position.y += displacement;
+
+        if (this.model.position.y <= 0) {
+            this.model.position.y = 0;
+            this.isJumping = false;
+            const directionPressed = DIRECTIONS.some(key => keysPressed[key] === true);
+            if (directionPressed) {
+                this.moveCharacter(delta, keysPressed);
+            } else {
+                this.playAnimation('Idle'); // Go back to Idle after landing
+            }
+        } else {
+            // Allow horizontal movement while jumping
+            this.moveCharacter(delta, keysPressed);
+        }
+    }
+
+    private moveCharacter(delta: number, keysPressed: { [key: string]: boolean }) {
+        // Check if shift is pressed
+        this.toggleRun = keysPressed['shift'] === true;
+
+        // calculate towards camera direction
+        const angleYCameraDirection = Math.atan2(
+            (this.camera.position.x - this.model.position.x),
+            (this.camera.position.z - this.model.position.z)
+        );
+        // diagonal movement angle offset
+        const directionOffset = this.directionOffset(keysPressed);
+
+        // rotate model
+        this.rotateQuaternion.setFromAxisAngle(this.rotateAngle, angleYCameraDirection + directionOffset);
+        this.model.quaternion.rotateTowards(this.rotateQuaternion, 0.2);
+
+        // calculate direction
+        this.camera.getWorldDirection(this.walkDirection);
+        this.walkDirection.y = 0;
+        this.walkDirection.normalize();
+        this.walkDirection.applyAxisAngle(this.rotateAngle, directionOffset);
+
+        // run/walk velocity
+        const velocity = this.toggleRun ? this.runVelocity : this.walkVelocity;
+
+        // move model & camera
+        const moveX = -this.walkDirection.x * velocity * delta;
+        const moveZ = -this.walkDirection.z * velocity * delta;
+
+        this.model.position.x += moveX;
+        this.model.position.z += moveZ;
+
+        this.updateCameraTarget(moveX, moveZ);
+
+        // Update animation based on run/walk
+        if (!this.isJumping) {  // Only change to walk/run animation if not jumping
+            const newAction = this.toggleRun ? 'Run' : 'Walk';
+            if (this.currentAction !== newAction) {
+                this.playAnimation(newAction);
             }
         }
     }
 
-    private playAnimation(actionName: string) {
+    public playAnimation(actionName: string) {
         const action = this.animationsMap.get(actionName);
         if (action) {
-            this.mixer.stopAllAction();
-            action.reset().fadeIn(0.5).play();
+            const current = this.animationsMap.get(this.currentAction);
+            if (current) {
+                current.fadeOut(0.2); // Smooth transition from the current animation
+            }
+            action.reset().fadeIn(0.2).play();
+            this.currentAction = actionName; // Update current action state
         }
     }
 
@@ -104,20 +167,20 @@ export class CharacterControls {
             if (keysPressed[D]) {
                 directionOffset = Math.PI / 4;
             } else if (keysPressed[A]) {
-                directionOffset = - Math.PI / 4; 
+                directionOffset = - Math.PI / 4;
             }
         } else if (keysPressed[W]) {
             if (keysPressed[D]) {
-                directionOffset = Math.PI / 4 + Math.PI / 2; 
+                directionOffset = Math.PI / 4 + Math.PI / 2;
             } else if (keysPressed[A]) {
-                directionOffset = -Math.PI / 4 - Math.PI / 2; 
+                directionOffset = -Math.PI / 4 - Math.PI / 2;
             } else {
-                directionOffset = Math.PI; 
+                directionOffset = Math.PI;
             }
         } else if (keysPressed[D]) {
-            directionOffset = Math.PI / 2; 
+            directionOffset = Math.PI / 2;
         } else if (keysPressed[A]) {
-            directionOffset = - Math.PI / 2; 
+            directionOffset = - Math.PI / 2;
         }
 
         return directionOffset;

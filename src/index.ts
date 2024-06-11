@@ -44,6 +44,7 @@ let mixer: THREE.AnimationMixer;
 
 gltfLoader.load('https://models.readyplayer.me/65893b0514f9f5f28e61d783.glb', function (gltf) {
     const model = gltf.scene;
+    model.position.y = 0; // Set initial position closer to the ground
     model.traverse(function (object: THREE.Object3D) {
         if ((object as THREE.Mesh).isMesh) (object as THREE.Mesh).castShadow = true;
     });
@@ -63,12 +64,33 @@ gltfLoader.load('https://models.readyplayer.me/65893b0514f9f5f28e61d783.glb', fu
             console.log('Idle animation loaded', idleFbx.animations[0]);
             console.log('Idle action', idleAction);
 
-            const animationsMap = new Map<string, THREE.AnimationAction>();
-            animationsMap.set('Walk', walkAction);
-            animationsMap.set('Idle', idleAction);
+            // Load Run Animation
+            fbxLoader.load('models/Run.fbx', function (runFbx) {
+                const runAction = mixer.clipAction(runFbx.animations[0]);
+                console.log('Run animation loaded', runFbx.animations[0]);
+                console.log('Run action', runAction);
 
-            characterControls = new CharacterControls(model, mixer, orbitControls, camera, animationsMap, 'Idle');
-            console.log('Character controls initialized');
+                // Load Jump Animation
+                fbxLoader.load('models/Jump.fbx', function (jumpFbx) {
+                    const jumpAction = mixer.clipAction(jumpFbx.animations[0]);
+                    console.log('Jump animation loaded', jumpFbx.animations[0]);
+                    console.log('Jump action', jumpAction);
+
+                    const animationsMap = new Map<string, THREE.AnimationAction>();
+                    animationsMap.set('Walk', walkAction);
+                    animationsMap.set('Idle', idleAction);
+                    animationsMap.set('Run', runAction);
+                    animationsMap.set('Jump', jumpAction);
+
+                    characterControls = new CharacterControls(model, mixer, orbitControls, camera, animationsMap, 'Idle');
+                    characterControls.playAnimation('Idle');  // Start with Idle animation
+                    console.log('Character controls initialized');
+                }, undefined, function (error) {
+                    console.error('Error loading Jump animation:', error);
+                });
+            }, undefined, function (error) {
+                console.error('Error loading Run animation:', error);
+            });
         }, undefined, function (error) {
             console.error('Error loading Idle animation:', error);
         });
@@ -78,6 +100,8 @@ gltfLoader.load('https://models.readyplayer.me/65893b0514f9f5f28e61d783.glb', fu
 }, undefined, function (error) {
     console.error('Error loading model:', error);
 });
+
+
 
 // CONTROL KEYS
 const keysPressed: { [key: string]: boolean } = {};
