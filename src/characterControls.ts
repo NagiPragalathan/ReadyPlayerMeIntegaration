@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
-import { A, D, DIRECTIONS, S, W } from './utils';
+import { W, A, S, D, ARROW_UP, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT, DIRECTIONS } from './utils';
 
 export class CharacterControls {
     model: THREE.Group;
@@ -161,26 +161,26 @@ export class CharacterControls {
     }
 
     private directionOffset(keysPressed: { [key: string]: boolean }) {
-        let directionOffset = 0; // w
+        let directionOffset = 0;
 
-        if (keysPressed[S]) {
-            if (keysPressed[D]) {
-                directionOffset = Math.PI / 4;
-            } else if (keysPressed[A]) {
-                directionOffset = - Math.PI / 4;
-            }
-        } else if (keysPressed[W]) {
-            if (keysPressed[D]) {
+        if (keysPressed[W] || keysPressed[ARROW_UP]) {
+            if (keysPressed[D] || keysPressed[ARROW_RIGHT]) {
                 directionOffset = Math.PI / 4 + Math.PI / 2;
-            } else if (keysPressed[A]) {
+            } else if (keysPressed[A] || keysPressed[ARROW_LEFT]) {
                 directionOffset = -Math.PI / 4 - Math.PI / 2;
             } else {
                 directionOffset = Math.PI;
             }
-        } else if (keysPressed[D]) {
+        } else if (keysPressed[S] || keysPressed[ARROW_DOWN]) {
+            if (keysPressed[D] || keysPressed[ARROW_RIGHT]) {
+                directionOffset = Math.PI / 4;
+            } else if (keysPressed[A] || keysPressed[ARROW_LEFT]) {
+                directionOffset = -Math.PI / 4;
+            }
+        } else if (keysPressed[D] || keysPressed[ARROW_RIGHT]) {
             directionOffset = Math.PI / 2;
-        } else if (keysPressed[A]) {
-            directionOffset = - Math.PI / 2;
+        } else if (keysPressed[A] || keysPressed[ARROW_LEFT]) {
+            directionOffset = -Math.PI / 2;
         }
 
         return directionOffset;

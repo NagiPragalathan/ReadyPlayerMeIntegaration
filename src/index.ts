@@ -101,18 +101,18 @@ gltfLoader.load('https://models.readyplayer.me/65893b0514f9f5f28e61d783.glb', fu
     console.error('Error loading model:', error);
 });
 
-
-
 // CONTROL KEYS
 const keysPressed: { [key: string]: boolean } = {};
 const keyDisplayQueue = new KeyDisplay();
 document.addEventListener('keydown', (event) => {
     keyDisplayQueue.down(event.key);
     (keysPressed as any)[event.key.toLowerCase()] = true;
+    (keysPressed as any)[event.key] = true;
 }, false);
 document.addEventListener('keyup', (event) => {
     keyDisplayQueue.up(event.key);
     (keysPressed as any)[event.key.toLowerCase()] = false;
+    (keysPressed as any)[event.key] = false;
 }, false);
 
 const clock = new THREE.Clock();
