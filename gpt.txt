@@ -1,0 +1,479 @@
+charterControls.ts
+
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
+import { W, A, S, D, ARROW_UP, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT, DIRECTIONS } from './utils';
+
+export class CharacterControls {
+    model: THREE.Group;
+    mixer: THREE.AnimationMixer;
+    orbitControl: OrbitControls;
+    camera: THREE.Camera;
+    currentAction: string;
+    animationsMap: Map<string, THREE.AnimationAction>;
+
+    // state
+    toggleRun = false;
+    isJumping = false;
+    jumpStartTime = 0;
+    initialJumpVelocity = 2;
+    gravity = -10;
+
+    // temporary data
+    walkDirection = new THREE.Vector3();
+    rotateAngle = new THREE.Vector3(0, 1, 0);
+    rotateQuaternion = new THREE.Quaternion();
+    cameraTarget = new THREE.Vector3();
+    jumpVelocity = new THREE.Vector3(0, 0, 0); // Define jumpVelocity
+
+    // constants
+    runVelocity = 5;
+    walkVelocity = 2;
+
+    constructor(model: THREE.Group, mixer: THREE.AnimationMixer, orbitControl: OrbitControls, camera: THREE.Camera, animationsMap: Map<string, THREE.AnimationAction>, currentAction: string) {
+        this.model = model;
+        this.mixer = mixer;
+        this.orbitControl = orbitControl;
+        this.camera = camera;
+        this.animationsMap = animationsMap;
+        this.currentAction = currentAction;
+        this.playAnimation('Idle'); // Ensure initial animation is Idle
+        this.updateCameraTarget(0, 0);
+    }
+
+    public update(delta: number, keysPressed: { [key: string]: boolean }) {
+        const directionPressed = DIRECTIONS.some(key => keysPressed[key] === true);
+
+        if (keysPressed[' ']) { // Space key for jump
+            this.startJump();
+        }
+
+        if (this.isJumping) {
+            this.updateJump(delta, keysPressed);
+        } else if (directionPressed) {
+            this.moveCharacter(delta, keysPressed);
+        } else {
+            if (this.currentAction !== 'Idle') {
+                this.playAnimation('Idle');
+            }
+        }
+
+        // Ensure character does not sink below the ground
+        if (this.model.position.y < 0) {
+            this.model.position.y = 0;
+        }
+
+        this.updateCameraTarget(0, 0);
+    }
+
+    private startJump() {
+        if (!this.isJumping) {
+            this.isJumping = true;
+            this.jumpStartTime = performance.now();
+            this.jumpVelocity.y = this.initialJumpVelocity;
+            this.playAnimation('Jump'); // Assumes a jump animation is available
+        }
+    }
+
+    private updateJump(delta: number, keysPressed: { [key: string]: boolean }) {
+        const elapsedTime = (performance.now() - this.jumpStartTime) / 1000;
+        const displacement = (this.initialJumpVelocity * elapsedTime) + (0.5 * this.gravity * Math.pow(elapsedTime, 2));
+        this.model.position.y += displacement;
+
+        if (this.model.position.y <= 0) {
+            this.model.position.y = 0;
+            this.isJumping = false;
+            const directionPressed = DIRECTIONS.some(key => keysPressed[key] === true);
+            if (directionPressed) {
+                this.moveCharacter(delta, keysPressed);
+            } else {
+                this.playAnimation('Idle'); // Go back to Idle after landing
+            }
+        } else {
+            // Allow horizontal movement while jumping
+            this.moveCharacter(delta, keysPressed);
+        }
+    }
+
+    private moveCharacter(delta: number, keysPressed: { [key: string]: boolean }) {
+        // Check if shift is pressed
+        this.toggleRun = keysPressed['shift'] === true;
+
+        // calculate towards camera direction
+        const angleYCameraDirection = Math.atan2(
+            (this.camera.position.x - this.model.position.x),
+            (this.camera.position.z - this.model.position.z)
+        );
+        // diagonal movement angle offset
+        const directionOffset = this.directionOffset(keysPressed);
+
+        // rotate model
+        this.rotateQuaternion.setFromAxisAngle(this.rotateAngle, angleYCameraDirection + directionOffset);
+        this.model.quaternion.rotateTowards(this.rotateQuaternion, 0.2);
+
+        // calculate direction
+        this.camera.getWorldDirection(this.walkDirection);
+        this.walkDirection.y = 0;
+        this.walkDirection.normalize();
+        this.walkDirection.applyAxisAngle(this.rotateAngle, directionOffset);
+
+        // run/walk velocity
+        const velocity = this.toggleRun ? this.runVelocity : this.walkVelocity;
+
+        // move model & camera
+        const moveX = -this.walkDirection.x * velocity * delta;
+        const moveZ = -this.walkDirection.z * velocity * delta;
+
+        this.model.position.x += moveX;
+        this.model.position.z += moveZ;
+
+        this.updateCameraTarget(moveX, moveZ);
+
+        // Update animation based on run/walk
+        if (!this.isJumping) {  // Only change to walk/run animation if not jumping
+            const newAction = this.toggleRun ? 'Run' : 'Walk';
+            if (this.currentAction !== newAction) {
+                this.playAnimation(newAction);
+            }
+        }
+    }
+
+    public playAnimation(actionName: string) {
+        const action = this.animationsMap.get(actionName);
+        if (action) {
+            const current = this.animationsMap.get(this.currentAction);
+            if (current) {
+                current.fadeOut(0.2); // Smooth transition from the current animation
+            }
+            action.reset().fadeIn(0.2).play();
+            this.currentAction = actionName; // Update current action state
+        }
+    }
+
+    private updateCameraTarget(moveX: number, moveZ: number) {
+        // move camera
+        this.camera.position.x += moveX;
+        this.camera.position.z += moveZ;
+
+        // update camera target
+        this.cameraTarget.x = this.model.position.x;
+        this.cameraTarget.y = this.model.position.y + 1;
+        this.cameraTarget.z = this.model.position.z;
+        this.orbitControl.target = this.cameraTarget;
+    }
+
+    private directionOffset(keysPressed: { [key: string]: boolean }) {
+        let directionOffset = 0;
+
+        if (keysPressed[W] || keysPressed[ARROW_UP]) {
+            if (keysPressed[D] || keysPressed[ARROW_RIGHT]) {
+                directionOffset = Math.PI / 4 + Math.PI / 2;
+            } else if (keysPressed[A] || keysPressed[ARROW_LEFT]) {
+                directionOffset = -Math.PI / 4 - Math.PI / 2;
+            } else {
+                directionOffset = Math.PI;
+            }
+        } else if (keysPressed[S] || keysPressed[ARROW_DOWN]) {
+            if (keysPressed[D] || keysPressed[ARROW_RIGHT]) {
+                directionOffset = Math.PI / 4;
+            } else if (keysPressed[A] || keysPressed[ARROW_LEFT]) {
+                directionOffset = -Math.PI / 4;
+            }
+        } else if (keysPressed[D] || keysPressed[ARROW_RIGHT]) {
+            directionOffset = Math.PI / 2;
+        } else if (keysPressed[A] || keysPressed[ARROW_LEFT]) {
+            directionOffset = -Math.PI / 2;
+        }
+
+        return directionOffset;
+    }
+}
+
+
+index.ts
+import { KeyDisplay } from './utils';
+import { CharacterControls } from './characterControls';
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
+import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
+
+// SCENE
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xa8def0);
+
+// CAMERA
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.y = 5;
+camera.position.z = 5;
+camera.position.x = 0;
+
+// RENDERER
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.shadowMap.enabled = true;
+
+// CONTROLS
+const orbitControls = new OrbitControls(camera, renderer.domElement);
+orbitControls.enableDamping = true;
+orbitControls.minDistance = 5;
+orbitControls.maxDistance = 15;
+orbitControls.enablePan = false;
+orbitControls.maxPolarAngle = Math.PI / 2 - 0.05;
+orbitControls.update();
+
+// LIGHTS
+light();
+
+// FLOOR
+generateFloor();
+
+// MODEL
+let characterControls: CharacterControls;
+const gltfLoader = new GLTFLoader();
+const fbxLoader = new FBXLoader();
+let mixer: THREE.AnimationMixer;
+
+gltfLoader.load('https://models.readyplayer.me/65893b0514f9f5f28e61d783.glb', function (gltf) {
+    const model = gltf.scene;
+    model.position.y = 0; // Set initial position closer to the ground
+    model.traverse(function (object: THREE.Object3D) {
+        if ((object as THREE.Mesh).isMesh) (object as THREE.Mesh).castShadow = true;
+    });
+    scene.add(model);
+
+    mixer = new THREE.AnimationMixer(model);
+
+    // Load Walking Animation
+    fbxLoader.load('models/Walking.fbx', function (walkFbx) {
+        const walkAction = mixer.clipAction(walkFbx.animations[0]);
+        console.log('Walk animation loaded', walkFbx.animations[0]);
+        console.log('Walk action', walkAction);
+
+        // Load Idle Animation
+        fbxLoader.load('models/Idle.fbx', function (idleFbx) {
+            const idleAction = mixer.clipAction(idleFbx.animations[0]);
+            console.log('Idle animation loaded', idleFbx.animations[0]);
+            console.log('Idle action', idleAction);
+
+            // Load Run Animation
+            fbxLoader.load('models/Run.fbx', function (runFbx) {
+                const runAction = mixer.clipAction(runFbx.animations[0]);
+                console.log('Run animation loaded', runFbx.animations[0]);
+                console.log('Run action', runAction);
+
+                // Load Jump Animation
+                fbxLoader.load('models/Jump.fbx', function (jumpFbx) {
+                    const jumpAction = mixer.clipAction(jumpFbx.animations[0]);
+                    console.log('Jump animation loaded', jumpFbx.animations[0]);
+                    console.log('Jump action', jumpAction);
+
+                    const animationsMap = new Map<string, THREE.AnimationAction>();
+                    animationsMap.set('Walk', walkAction);
+                    animationsMap.set('Idle', idleAction);
+                    animationsMap.set('Run', runAction);
+                    animationsMap.set('Jump', jumpAction);
+
+                    characterControls = new CharacterControls(model, mixer, orbitControls, camera, animationsMap, 'Idle');
+                    characterControls.playAnimation('Idle');  // Start with Idle animation
+                    console.log('Character controls initialized');
+                }, undefined, function (error) {
+                    console.error('Error loading Jump animation:', error);
+                });
+            }, undefined, function (error) {
+                console.error('Error loading Run animation:', error);
+            });
+        }, undefined, function (error) {
+            console.error('Error loading Idle animation:', error);
+        });
+    }, undefined, function (error) {
+        console.error('Error loading Walk animation:', error);
+    });
+}, undefined, function (error) {
+    console.error('Error loading model:', error);
+});
+
+// CONTROL KEYS
+const keysPressed: { [key: string]: boolean } = {};
+const keyDisplayQueue = new KeyDisplay();
+document.addEventListener('keydown', (event) => {
+    keyDisplayQueue.down(event.key);
+    (keysPressed as any)[event.key.toLowerCase()] = true;
+    (keysPressed as any)[event.key] = true;
+}, false);
+document.addEventListener('keyup', (event) => {
+    keyDisplayQueue.up(event.key);
+    (keysPressed as any)[event.key.toLowerCase()] = false;
+    (keysPressed as any)[event.key] = false;
+}, false);
+
+const clock = new THREE.Clock();
+// ANIMATE
+function animate() {
+    const delta = clock.getDelta();
+    if (characterControls) {
+        characterControls.update(delta, keysPressed);
+    }
+    if (mixer) {
+        mixer.update(delta);
+    }
+    orbitControls.update();
+    renderer.render(scene, camera);
+    requestAnimationFrame(animate);
+}
+document.body.appendChild(renderer.domElement);
+animate();
+
+// RESIZE HANDLER
+function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    keyDisplayQueue.updatePosition();
+}
+window.addEventListener('resize', onWindowResize);
+
+function generateFloor() {
+    // TEXTURES
+    const textureLoader = new THREE.TextureLoader();
+    const sandBaseColor = textureLoader.load("./textures/sand/Sand 002_COLOR.jpg");
+    const sandNormalMap = textureLoader.load("./textures/sand/Sand 002_NRM.jpg");
+    const sandHeightMap = textureLoader.load("./textures/sand/Sand 002_DISP.jpg");
+    const sandAmbientOcclusion = textureLoader.load("./textures/sand/Sand 002_OCC.jpg");
+
+    const WIDTH = 80;
+    const LENGTH = 80;
+
+    const geometry = new THREE.PlaneGeometry(WIDTH, LENGTH, 512, 512);
+    const material = new THREE.MeshStandardMaterial({
+        map: sandBaseColor, normalMap: sandNormalMap,
+        displacementMap: sandHeightMap, displacementScale: 0.1,
+        aoMap: sandAmbientOcclusion
+    });
+    wrapAndRepeatTexture(material.map);
+    wrapAndRepeatTexture(material.normalMap);
+    wrapAndRepeatTexture(material.displacementMap);
+    wrapAndRepeatTexture(material.aoMap);
+
+    const floor = new THREE.Mesh(geometry, material);
+    floor.receiveShadow = true;
+    floor.rotation.x = - Math.PI / 2;
+    scene.add(floor);
+}
+
+function wrapAndRepeatTexture(map: THREE.Texture) {
+    map.wrapS = map.wrapT = THREE.RepeatWrapping;
+    map.repeat.x = map.repeat.y = 10;
+}
+
+function light() {
+    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+    dirLight.position.set(- 60, 100, - 10);
+    dirLight.castShadow = true;
+    dirLight.shadow.camera.top = 50;
+    dirLight.shadow.camera.bottom = - 50;
+    dirLight.shadow.camera.left = - 50;
+    dirLight.shadow.camera.right = 50;
+    dirLight.shadow.camera.near = 0.1;
+    dirLight.shadow.camera.far = 200;
+    dirLight.shadow.mapSize.width = 4096;
+    dirLight.shadow.mapSize.height = 4096;
+    scene.add(dirLight);
+    // scene.add( new THREE.CameraHelper(dirLight.shadow.camera))
+}
+
+
+utils.ts
+export const W = 'w';
+export const A = 'a';
+export const S = 's';
+export const D = 'd';
+export const ARROW_UP = 'ArrowUp';
+export const ARROW_DOWN = 'ArrowDown';
+export const ARROW_LEFT = 'ArrowLeft';
+export const ARROW_RIGHT = 'ArrowRight';
+export const SHIFT = 'shift';
+export const DIRECTIONS = [W, A, S, D, ARROW_UP, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT];
+
+export class KeyDisplay {
+    map: Map<string, HTMLDivElement> = new Map();
+
+    constructor() {
+        const w: HTMLDivElement = document.createElement("div");
+        const a: HTMLDivElement = document.createElement("div");
+        const s: HTMLDivElement = document.createElement("div");
+        const d: HTMLDivElement = document.createElement("div");
+        const arrowUp: HTMLDivElement = document.createElement("div");
+        const arrowDown: HTMLDivElement = document.createElement("div");
+        const arrowLeft: HTMLDivElement = document.createElement("div");
+        const arrowRight: HTMLDivElement = document.createElement("div");
+        const shift: HTMLDivElement = document.createElement("div");
+
+        this.map.set(W, w);
+        this.map.set(A, a);
+        this.map.set(S, s);
+        this.map.set(D, d);
+        this.map.set(ARROW_UP, arrowUp);
+        this.map.set(ARROW_DOWN, arrowDown);
+        this.map.set(ARROW_LEFT, arrowLeft);
+        this.map.set(ARROW_RIGHT, arrowRight);
+        this.map.set(SHIFT, shift);
+
+        this.map.forEach((v, k) => {
+            v.style.color = 'blue';
+            v.style.fontSize = '50px';
+            v.style.fontWeight = '800';
+            v.style.position = 'absolute';
+            v.textContent = k;
+        });
+
+        this.updatePosition();
+
+        this.map.forEach((v, _) => {
+            document.body.append(v);
+        });
+    }
+
+    public updatePosition() {
+        this.map.get(W).style.top = `${window.innerHeight - 200}px`;
+        this.map.get(A).style.top = `${window.innerHeight - 150}px`;
+        this.map.get(S).style.top = `${window.innerHeight - 150}px`;
+        this.map.get(D).style.top = `${window.innerHeight - 150}px`;
+        // this.map.get(ARROW_UP).style.top = `${window.innerHeight - 100}px`;
+        // this.map.get(ARROW_DOWN).style.top = `${window.innerHeight - 50}px`;
+        // this.map.get(ARROW_LEFT).style.top = `${window.innerHeight - 50}px`;
+        // this.map.get(ARROW_RIGHT).style.top = `${window.innerHeight - 50}px`;
+        this.map.get(SHIFT).style.top = `${window.innerHeight - 50}px`;
+
+        this.map.get(W).style.left = `${100}px`;
+        this.map.get(A).style.left = `${50}px`;
+        this.map.get(S).style.left = `${100}px`;
+        this.map.get(D).style.left = `${150}px`;
+        this.map.get(ARROW_UP).style.left = `${300}px`;
+        this.map.get(ARROW_DOWN).style.left = `${300}px`;
+        this.map.get(ARROW_LEFT).style.left = `${250}px`;
+        this.map.get(ARROW_RIGHT).style.left = `${350}px`;
+        this.map.get(SHIFT).style.left = `${50}px`;
+    }
+
+    public down(key: string) {
+        if (this.map.get(key.toLowerCase())) {
+            this.map.get(key.toLowerCase()).style.color = 'red';
+        }
+        if (this.map.get(key)) {
+            this.map.get(key).style.color = 'red';
+        }
+    }
+
+    public up(key: string) {
+        if (this.map.get(key.toLowerCase())) {
+            this.map.get(key.toLowerCase()).style.color = 'blue';
+        }
+        if (this.map.get(key)) {
+            this.map.get(key).style.color = 'blue';
+        }
+    }
+}

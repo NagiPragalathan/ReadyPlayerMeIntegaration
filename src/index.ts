@@ -5,6 +5,20 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 
+// WebSocket connection
+const socket = new WebSocket('ws://localhost:8080');
+
+// Function to send the character's state to the server
+function sendCharacterState() {
+    const state = {
+        position: characterControls.model.position,
+        quaternion: characterControls.model.quaternion,
+        currentAction: characterControls.currentAction,
+    };
+    console.log('Sending state:', state);
+    socket.send(JSON.stringify(state));
+}
+
 // SCENE
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xa8def0);
@@ -42,6 +56,9 @@ const gltfLoader = new GLTFLoader();
 const fbxLoader = new FBXLoader();
 let mixer: THREE.AnimationMixer;
 
+// Store other players
+const otherPlayers: { [id: string]: THREE.Group } = {};
+
 gltfLoader.load('https://models.readyplayer.me/65893b0514f9f5f28e61d783.glb', function (gltf) {
     const model = gltf.scene;
     model.position.y = 0; // Set initial position closer to the ground
@@ -55,26 +72,18 @@ gltfLoader.load('https://models.readyplayer.me/65893b0514f9f5f28e61d783.glb', fu
     // Load Walking Animation
     fbxLoader.load('models/Walking.fbx', function (walkFbx) {
         const walkAction = mixer.clipAction(walkFbx.animations[0]);
-        console.log('Walk animation loaded', walkFbx.animations[0]);
-        console.log('Walk action', walkAction);
 
         // Load Idle Animation
         fbxLoader.load('models/Idle.fbx', function (idleFbx) {
             const idleAction = mixer.clipAction(idleFbx.animations[0]);
-            console.log('Idle animation loaded', idleFbx.animations[0]);
-            console.log('Idle action', idleAction);
 
             // Load Run Animation
             fbxLoader.load('models/Run.fbx', function (runFbx) {
                 const runAction = mixer.clipAction(runFbx.animations[0]);
-                console.log('Run animation loaded', runFbx.animations[0]);
-                console.log('Run action', runAction);
 
                 // Load Jump Animation
                 fbxLoader.load('models/Jump.fbx', function (jumpFbx) {
                     const jumpAction = mixer.clipAction(jumpFbx.animations[0]);
-                    console.log('Jump animation loaded', jumpFbx.animations[0]);
-                    console.log('Jump action', jumpAction);
 
                     const animationsMap = new Map<string, THREE.AnimationAction>();
                     animationsMap.set('Walk', walkAction);
@@ -84,7 +93,6 @@ gltfLoader.load('https://models.readyplayer.me/65893b0514f9f5f28e61d783.glb', fu
 
                     characterControls = new CharacterControls(model, mixer, orbitControls, camera, animationsMap, 'Idle');
                     characterControls.playAnimation('Idle');  // Start with Idle animation
-                    console.log('Character controls initialized');
                 }, undefined, function (error) {
                     console.error('Error loading Jump animation:', error);
                 });
@@ -108,11 +116,13 @@ document.addEventListener('keydown', (event) => {
     keyDisplayQueue.down(event.key);
     (keysPressed as any)[event.key.toLowerCase()] = true;
     (keysPressed as any)[event.key] = true;
+    sendCharacterState();
 }, false);
 document.addEventListener('keyup', (event) => {
     keyDisplayQueue.up(event.key);
     (keysPressed as any)[event.key.toLowerCase()] = false;
     (keysPressed as any)[event.key] = false;
+    sendCharacterState();
 }, false);
 
 const clock = new THREE.Clock();
@@ -191,3 +201,33 @@ function light() {
     scene.add(dirLight);
     // scene.add( new THREE.CameraHelper(dirLight.shadow.camera))
 }
+
+// Handle incoming messages
+socket.onmessage = (message) => {
+    const data = JSON.parse(message.data);
+    console.log('Received data:', data);
+    if (data.disconnected) {
+        // Remove disconnected player
+        if (otherPlayers[data.clientId]) {
+            scene.remove(otherPlayers[data.clientId]);
+            delete otherPlayers[data.clientId];
+        }
+    } else if (otherPlayers[data.clientId]) {
+        // Update existing player
+        const player = otherPlayers[data.clientId];
+        player.position.set(data.position.x, data.position.y, data.position.z);
+        player.quaternion.set(data.quaternion._x, data.quaternion._y, data.quaternion._z, data.quaternion._w);
+    } else {
+        // Add new player
+        const gltfLoader = new GLTFLoader();
+        gltfLoader.load('https://models.readyplayer.me/65893b0514f9f5f28e61d783.glb', function (gltf) {
+            const model = gltf.scene;
+            model.position.y = 0; // Set initial position closer to the ground
+            model.traverse(function (object: THREE.Object3D) {
+                if ((object as THREE.Mesh).isMesh) (object as THREE.Mesh).castShadow = true;
+            });
+            scene.add(model);
+            otherPlayers[data.clientId] = model;
+        });
+    }
+};
