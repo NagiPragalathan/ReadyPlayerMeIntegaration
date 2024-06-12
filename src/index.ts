@@ -9,7 +9,13 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 const socket = new WebSocket('ws://localhost:8080');
 
 // Function to send the character's state to the server
-function sendCharacterState() {
+let lastSentTime = 0;
+function sendCharacterState(): void {
+    const now = Date.now();
+    if (now - lastSentTime < 100) return; // Throttle to send every 100ms
+
+    if (!characterControls) return;
+
     const state = {
         position: characterControls.model.position,
         quaternion: characterControls.model.quaternion,
@@ -17,6 +23,7 @@ function sendCharacterState() {
     };
     console.log('Sending state:', state);
     socket.send(JSON.stringify(state));
+    lastSentTime = now;
 }
 
 // SCENE
@@ -56,13 +63,15 @@ const gltfLoader = new GLTFLoader();
 const fbxLoader = new FBXLoader();
 let mixer: THREE.AnimationMixer;
 
-// Store other players
+// Store other players and their mixers
 const otherPlayers: { [id: string]: THREE.Group } = {};
+const otherMixers: { [id: string]: THREE.AnimationMixer } = {};
+const otherActions: { [id: string]: { current: THREE.AnimationAction | null, map: Map<string, THREE.AnimationAction> } } = {};
 
 gltfLoader.load('https://models.readyplayer.me/65893b0514f9f5f28e61d783.glb', function (gltf) {
     const model = gltf.scene;
     model.position.y = 0; // Set initial position closer to the ground
-    model.traverse(function (object: THREE.Object3D) {
+    model.traverse(function (object) {
         if ((object as THREE.Mesh).isMesh) (object as THREE.Mesh).castShadow = true;
     });
     scene.add(model);
@@ -114,20 +123,20 @@ const keysPressed: { [key: string]: boolean } = {};
 const keyDisplayQueue = new KeyDisplay();
 document.addEventListener('keydown', (event) => {
     keyDisplayQueue.down(event.key);
-    (keysPressed as any)[event.key.toLowerCase()] = true;
-    (keysPressed as any)[event.key] = true;
+    keysPressed[event.key.toLowerCase()] = true;
+    keysPressed[event.key] = true;
     sendCharacterState();
 }, false);
 document.addEventListener('keyup', (event) => {
     keyDisplayQueue.up(event.key);
-    (keysPressed as any)[event.key.toLowerCase()] = false;
-    (keysPressed as any)[event.key] = false;
+    keysPressed[event.key.toLowerCase()] = false;
+    keysPressed[event.key] = false;
     sendCharacterState();
 }, false);
 
 const clock = new THREE.Clock();
 // ANIMATE
-function animate() {
+function animate(): void {
     const delta = clock.getDelta();
     if (characterControls) {
         characterControls.update(delta, keysPressed);
@@ -135,6 +144,15 @@ function animate() {
     if (mixer) {
         mixer.update(delta);
     }
+
+    // Update other players
+    for (const clientId in otherPlayers) {
+        const otherPlayer = otherPlayers[clientId];
+        if (otherMixers[clientId]) {
+            otherMixers[clientId].update(delta);
+        }
+    }
+
     orbitControls.update();
     renderer.render(scene, camera);
     requestAnimationFrame(animate);
@@ -143,7 +161,7 @@ document.body.appendChild(renderer.domElement);
 animate();
 
 // RESIZE HANDLER
-function onWindowResize() {
+function onWindowResize(): void {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -151,7 +169,7 @@ function onWindowResize() {
 }
 window.addEventListener('resize', onWindowResize);
 
-function generateFloor() {
+function generateFloor(): void {
     // TEXTURES
     const textureLoader = new THREE.TextureLoader();
     const sandBaseColor = textureLoader.load("./textures/sand/Sand 002_COLOR.jpg");
@@ -179,12 +197,12 @@ function generateFloor() {
     scene.add(floor);
 }
 
-function wrapAndRepeatTexture(map: THREE.Texture) {
+function wrapAndRepeatTexture(map: THREE.Texture): void {
     map.wrapS = map.wrapT = THREE.RepeatWrapping;
     map.repeat.x = map.repeat.y = 10;
 }
 
-function light() {
+function light(): void {
     scene.add(new THREE.AmbientLight(0xffffff, 0.7));
 
     const dirLight = new THREE.DirectionalLight(0xffffff, 1);
@@ -211,23 +229,84 @@ socket.onmessage = (message) => {
         if (otherPlayers[data.clientId]) {
             scene.remove(otherPlayers[data.clientId]);
             delete otherPlayers[data.clientId];
+            delete otherMixers[data.clientId];
+            delete otherActions[data.clientId];
         }
     } else if (otherPlayers[data.clientId]) {
         // Update existing player
         const player = otherPlayers[data.clientId];
         player.position.set(data.position.x, data.position.y, data.position.z);
         player.quaternion.set(data.quaternion._x, data.quaternion._y, data.quaternion._z, data.quaternion._w);
+
+        // Update animation
+        const mixer = otherMixers[data.clientId];
+        const actionsData = otherActions[data.clientId];
+        const action = actionsData.map.get(data.currentAction);
+        if (action) {
+            const current = actionsData.current;
+            if (current !== action) {
+                if (current) {
+                    current.fadeOut(0.2);
+                }
+                action.reset().fadeIn(0.2).play();
+                actionsData.current = action;
+            }
+        }
     } else {
         // Add new player
         const gltfLoader = new GLTFLoader();
         gltfLoader.load('https://models.readyplayer.me/65893b0514f9f5f28e61d783.glb', function (gltf) {
             const model = gltf.scene;
             model.position.y = 0; // Set initial position closer to the ground
-            model.traverse(function (object: THREE.Object3D) {
+            model.traverse(function (object) {
                 if ((object as THREE.Mesh).isMesh) (object as THREE.Mesh).castShadow = true;
             });
             scene.add(model);
             otherPlayers[data.clientId] = model;
+
+            // Create and store animation mixer
+            const otherMixer = new THREE.AnimationMixer(model);
+            otherMixers[data.clientId] = otherMixer;
+
+            // Initialize animation actions
+            const actionsMap = new Map<string, THREE.AnimationAction>();
+            fbxLoader.load('models/Walking.fbx', (walkFbx) => {
+                actionsMap.set('Walk', otherMixer.clipAction(walkFbx.animations[0]));
+            });
+            fbxLoader.load('models/Idle.fbx', (idleFbx) => {
+                actionsMap.set('Idle', otherMixer.clipAction(idleFbx.animations[0]));
+            });
+            fbxLoader.load('models/Run.fbx', (runFbx) => {
+                actionsMap.set('Run', otherMixer.clipAction(runFbx.animations[0]));
+            });
+            fbxLoader.load('models/Jump.fbx', (jumpFbx) => {
+                actionsMap.set('Jump', otherMixer.clipAction(jumpFbx.animations[0]));
+            });
+
+            // Store actions map and current action
+            otherActions[data.clientId] = { current: null, map: actionsMap };
+
+            // Update animation
+            const action = actionsMap.get(data.currentAction);
+            if (action) {
+                action.reset().fadeIn(0.2).play();
+                otherActions[data.clientId].current = action;
+            }
         });
     }
 };
+
+// Animations map for other players
+const animationsMap = new Map<string, THREE.AnimationClip>();
+fbxLoader.load('models/Walking.fbx', (walkFbx) => {
+    animationsMap.set('Walk', walkFbx.animations[0]);
+});
+fbxLoader.load('models/Idle.fbx', (idleFbx) => {
+    animationsMap.set('Idle', idleFbx.animations[0]);
+});
+fbxLoader.load('models/Run.fbx', (runFbx) => {
+    animationsMap.set('Run', runFbx.animations[0]);
+});
+fbxLoader.load('models/Jump.fbx', (jumpFbx) => {
+    animationsMap.set('Jump', jumpFbx.animations[0]);
+});
