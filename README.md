@@ -5,27 +5,15 @@ This project demonstrates character controls using Three.js, integrated with Rea
 ## Installation and Setup
 
 1. Clone the repository:
-    
-    bash
-    
-    Copy code
-    
+
     `git clone https://github.com/NagiPragalathan/ReadyPlayerMeIntegaration.git
     cd ReadyPlayerMeIntegaration` 
     
 2. Install dependencies:
-    
-    bash
-    
-    Copy code
-    
+
     `npm install` 
     
 3. Start the development server:
-    
-    bash
-    
-    Copy code
     
     `npm run start` 
     
@@ -45,10 +33,6 @@ This project demonstrates character controls using Three.js, integrated with Rea
 ## Integration Code
 
 Here's a snippet for integrating Ready Player Me avatars and animations:
-
-javascript
-
-Copy code
 
 `gltfLoader.load('https://models.readyplayer.me/65893b0514f9f5f28e61d783.glb', function (gltf) {
     const model = gltf.scene;
@@ -100,6 +84,10 @@ Copy code
     console.error('Error loading model:', error);
 });` 
 
+# Steps
+ - Replace your link For : `https://models.readyplayer.me/65893b0514f9f5f28e61d783.glb`
+ - And default models which is in models. for example models/Idle.fbx
+   
 ## Try it Online
 
 - Explore the example on [Stackblitz](https://stackblitz.com/github/tamani-coding/threejs-character-controls-example).
